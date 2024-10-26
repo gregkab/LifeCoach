@@ -1,9 +1,10 @@
+#api/notion_logic.py
+import os
 import datetime
 from fastapi import APIRouter, HTTPException
 from notion_client import Client
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import os
 
 from langchain.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -32,9 +33,13 @@ class LogEntry(BaseModel):
     goal_status: str
 
 class FeedbackRequest(BaseModel):
+    date: str
     thoughts: str
     goals: str
     reflections: str
+    goal_status: str
+
+llm = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=OPENAI_API_KEY)
 
 # Helper function to fetch logs within a date range
 async def fetch_logs_for_date_range(start_date: str, end_date: str):
@@ -72,14 +77,17 @@ async def fetch_logs_for_date_range(start_date: str, end_date: str):
                 reflections = reflections_property[0].get('plain_text', 'No Reflections')
 
             # New goal_status extraction
-            goal_status_property = page['properties'].get('Goal Status', {}).get('select', {}).get('name', 'Not Specified')
+            goal_status_property = page['properties'].get('Goal Status', {}).get('select', {})
+            goal_status = 'Not Specified'
+            if goal_status_property and 'name' in goal_status_property:
+                goal_status = goal_status_property.get('name', 'Not Specified')
 
             logs.append({
                 "date": date,
                 "thoughts": thoughts,
                 "goals": goals,
                 "reflections": reflections,
-                "goal_status": goal_status_property  # Add goal_status to logs
+                "goal_status": goal_status  # Add goal_status to logs
             })
         return logs
     except Exception as e:
@@ -182,54 +190,77 @@ async def generate_feedback(request: FeedbackRequest):
         return {"feedback": feedback}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-@router.post("/daily_feedback")
-async def generate_daily_feedback(request: FeedbackRequest):
-    try:
-        llm = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=OPENAI_API_KEY)
-
-        # Create a prompt specifically for daily feedback
-        prompt = ChatPromptTemplate.from_template(
-            "Today, I had the following thoughts: {thoughts}. My goals were: {goals}. "
-            "My reflections include: {reflections}. Based on these, provide immediate feedback and suggestions "
-            "to help me make progress on my goals and improve my productivity tomorrow."
+    
+# Function to format logs for the prompt
+def format_logs_for_prompt(logs):
+    formatted_logs = ""
+    for log in logs:
+        formatted_logs += (
+            f"Date: {log['date']}, "
+            f"Thoughts: {log['thoughts']}, "
+            f"Goals: {log['goals']} (Status: {log['goal_status']}), "
+            f"Reflections: {log['reflections']}\n"
         )
-        chain = prompt | llm | StrOutputParser()
-        feedback = chain.invoke({
-            "thoughts": request.thoughts,
-            "goals": request.goals,
-            "reflections": request.reflections
-        })
+    return formatted_logs
 
+# Daily Feedback Endpoint
+@router.post("/daily_feedback")
+async def generate_daily_feedback():
+    try:
+        # Fetch today's logs
+        today_str = datetime.date.today().isoformat()
+        logs = await fetch_logs_for_date_range(today_str, today_str)
+
+        if not logs:
+            return {"feedback": "No logs found for today."}
+
+        # Format logs for prompt
+        formatted_logs = format_logs_for_prompt(logs)
+
+        # Enhanced daily feedback prompt
+        prompt = ChatPromptTemplate.from_template(
+            "Here are my logs for today:\n{logs}\n"
+            "Based on these entries, provide clear, direct steps I should take right now to improve my day and reach my goals. "
+            "Be specific: tell me exactly what actions to take, even if they're small or involve mindset changes. "
+            "Make it clear, like you’re walking me through every step of what a successful day would look like. "
+            "Include motivation that reminds me why these steps will help me achieve my best self."
+        )
+
+        # Generate feedback
+        chain = prompt | llm | StrOutputParser()
+        feedback = chain.invoke({"logs": formatted_logs})
         return {"feedback": feedback}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # Weekly Feedback Endpoint
 @router.post("/weekly_feedback")
-async def generate_weekly_feedback(request: WeeklyFeedbackRequest):
+async def generate_weekly_feedback():
     try:
-        llm = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=OPENAI_API_KEY)
+        # Fetch logs for the past week
+        today = datetime.date.today()
+        one_week_ago_str = (today - datetime.timedelta(days=6)).isoformat()
+        logs = await fetch_logs_for_date_range(one_week_ago_str, today.isoformat())
 
-        # Aggregated prompt for weekly insights
+        if not logs:
+            return {"feedback": "No logs found for the past week."}
+
+        # Format logs for prompt
+        formatted_logs = format_logs_for_prompt(logs)
+
+        # Enhanced weekly feedback prompt
         prompt = ChatPromptTemplate.from_template(
-            "This past week, my daily thoughts were: {thoughts}. My goals over the week included: {goals}. "
-            "Across these days, I reflected on the following: {reflections}. "
-            "Based on this weekly review, provide a summary of my top achievements, recurring challenges, "
-            "and actionable strategies to help me stay on track and improve my productivity in the upcoming week."
+            "Here are my logs for the past week:\n{logs}\n"
+            "Based on these entries, provide a detailed plan for me to follow next week. "
+            "Identify any recurring patterns, highlight what worked well, and point out areas where I struggled. "
+            "Give me a step-by-step roadmap with specific actions to take each day or across the week. "
+            "Make each action concrete, and explain why these steps will maximize my progress. "
+            "Think like a life coach focused on ensuring my success, guiding me toward a powerful, fulfilling week."
         )
 
-        # Combine thoughts, goals, and reflections for the week
-        combined_thoughts = "; ".join(request.thoughts)
-        combined_goals = "; ".join(request.goals)
-        combined_reflections = "; ".join(request.reflections)
-
+        # Generate feedback
         chain = prompt | llm | StrOutputParser()
-        feedback = chain.invoke({
-            "thoughts": combined_thoughts,
-            "goals": combined_goals,
-            "reflections": combined_reflections
-        })
-
+        feedback = chain.invoke({"logs": formatted_logs})
         return {"feedback": feedback}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
