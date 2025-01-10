@@ -34,7 +34,7 @@ NOTION_DATABASE_ID=your_notion_database_id
 1. Start the FastAPI Server: Inside the 'api' directory, launch the FastAPI server.
 
 bash
-python api/main.py
+python -m api.main
 The server will start on http://localhost:8000.
 
 2. Run the Client Application: In a new terminal window, ensure the ai-life-coach environment is activated and run:

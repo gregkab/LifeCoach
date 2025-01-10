@@ -47,11 +47,20 @@ async def fetch_logs_for_date_range(start_date: str, end_date: str):
         response = notion.databases.query(
             database_id=DATABASE_ID,
             filter={
-                "property": "Date",
-                "date": {
-                    "on_or_after": start_date,
-                    "on_or_before": end_date
-                }
+                "and": [
+                    {
+                        "property": "Date",
+                        "date": {
+                            "on_or_after": start_date
+                        }
+                    },
+                    {
+                        "property": "Date",
+                        "date": {
+                            "on_or_before": end_date
+                        }
+                    }
+                ]
             }
         )
         logs = []
@@ -111,49 +120,58 @@ async def get_weekly_logs():
 @router.get("/logs")
 async def fetch_logs(goal_status: str = None):
     try:
-        response = notion.databases.query(
-            database_id=DATABASE_ID,
-            filter={
+        # Construct filter only if goal_status is provided
+        filter_clause = (
+            {
                 "property": "Goal Status",
                 "select": {
                     "equals": goal_status
                 }
-            } if goal_status else None  # Apply filter only if goal_status is provided
+            } if goal_status else None
         )
+
+        # Notion API query
+        query_params = {"database_id": DATABASE_ID}
+        if filter_clause:
+            query_params["filter"] = filter_clause
+
+        response = notion.databases.query(**query_params)
+
+        # Process logs
         logs = []
         for page in response['results']:
-            date_property = page['properties'].get('Date')
-            date = 'No Date'
-            if date_property and 'date' in date_property and date_property['date']:
-                date = date_property['date'].get('start', 'No Date')
+            # Handle 'Date' property safely
+            date_property = page['properties'].get('Date', {}).get('date', None)
+            date = date_property.get('start', 'No Date') if date_property else 'No Date'
 
+            # Handle 'Thoughts' property safely
             thoughts_property = page['properties'].get('Thoughts', {}).get('rich_text', [])
-            thoughts = 'No Thoughts'
-            if thoughts_property and len(thoughts_property) > 0:
-                thoughts = thoughts_property[0].get('plain_text', 'No Thoughts')
+            thoughts = thoughts_property[0].get('plain_text', 'No Thoughts') if thoughts_property else 'No Thoughts'
 
+            # Handle 'Goals' property safely
             goals_property = page['properties'].get('Goals', {}).get('rich_text', [])
-            goals = 'No Goals'
-            if goals_property and len(goals_property) > 0:
-                goals = goals_property[0].get('plain_text', 'No Goals')
+            goals = goals_property[0].get('plain_text', 'No Goals') if goals_property else 'No Goals'
 
+            # Handle 'Reflections' property safely
             reflections_property = page['properties'].get('Reflections', {}).get('rich_text', [])
-            reflections = 'No Reflections'
-            if reflections_property and len(reflections_property) > 0:
-                reflections = reflections_property[0].get('plain_text', 'No Reflections')
+            reflections = reflections_property[0].get('plain_text', 'No Reflections') if reflections_property else 'No Reflections'
 
-            goal_status_property = page['properties'].get('Goal Status', {}).get('select', {}).get('name', 'Not Specified')
+            # Handle 'Goal Status' property safely
+            goal_status_property = page['properties'].get('Goal Status', {}).get('select', None)
+            goal_status = goal_status_property.get('name', 'Not Specified') if goal_status_property else 'Not Specified'
 
             logs.append({
                 "date": date,
                 "thoughts": thoughts,
                 "goals": goals,
                 "reflections": reflections,
-                "goal_status": goal_status_property
+                "goal_status": goal_status
             })
+
         return {"logs": logs}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"An error occurred: {e}")
 
 # Endpoint to add a log with goal status
 @router.post("/logs")
@@ -176,9 +194,6 @@ async def add_log(entry: LogEntry):
 @router.post("/feedback")
 async def generate_feedback(request: FeedbackRequest):
     try:
-        # Initialize the ChatOpenAI model
-        llm = ChatOpenAI(model="gpt-4", temperature=0, openai_api_key=OPENAI_API_KEY)
-
         # Create the prompt template
         prompt = ChatPromptTemplate.from_template(
             "Here are my thoughts: {thoughts}. My goals: {goals}. My reflections: {reflections}. "
