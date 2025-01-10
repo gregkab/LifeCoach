@@ -2,7 +2,9 @@
 
 from fastapi import FastAPI
 import uvicorn
-from api.notion_logic import router as notion_router
+
+from api.routers import notion_router
+from api.utils.helpers import logger
 
 app = FastAPI(
     title="AI Life Coach API",
@@ -13,4 +15,5 @@ app = FastAPI(
 app.include_router(notion_router)
 
 if __name__ == "__main__":
-    uvicorn.run("api.main:app", host="localhost", port=8000, reload=True)
+    logger.info("Starting AI Life Coach API server...")
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
